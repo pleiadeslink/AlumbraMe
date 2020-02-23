@@ -4,8 +4,9 @@ import glob
 import jsonpickle
 from numpy import loadtxt
 import sys
-from datetime import datetime
+from datetime import datetime, date
 now = datetime.now()
+date = date.today()
 
 AGENT = 0
 IMPORTANT =  1
@@ -41,11 +42,8 @@ d_category["80_Credenciales"] = "Credenciales"
 d_category["90_Carga"] = "Carga"
 d_category["95_Extraccion"] = "Extracción"
 
-d_memory = { } # Used to store historical values for graphs
-d_memory["total_asignadas"] = 0
-d_memory["total_enproceso"] = 0
-d_memory["total_snmd"] = 0
-d_memory["total_confirmadas"] = 0
+# Opens dreamhost connection
+dream = mysql.connector.connect(host=sys.argv[1], user=sys.argv[2], passwd=sys.argv[3], database="alumbra")
 
 # Creates a table in the specified md file following certain rules
 def makeTable(md, rules, userid):
@@ -144,6 +142,46 @@ def makePage(userid, name):
         md.write("<small>Último refresco: " + str(now.strftime("%d/%m/%Y %H:%M:%S")) + "</small>")
         md.close()
 
+# Count tickets and store data in Dreamhost db
+def countTickets(ticketList, username):
+    asignadas = 0
+    enproceso = 0
+    snmd = 0
+    confirmadas = 0
+    errores = 0
+    consultas = 0
+    extracciones = 0
+    credenciales = 0
+
+    # Count tikets
+    for ticket in ticketList:
+        if(username == "total" or ticket.handler == username):
+            if(ticket.status == 50):
+                asignadas += 1
+            if(ticket.status == 30):
+                enproceso += 1
+            if(ticket.status == 20):
+                snmd += 1
+            if(ticket.status == 40):
+                confirmadas += 1
+            if(ticket.category == "10_Error"):
+                errores += 1
+            if(ticket.category == "40_Consulta"):
+                consultas += 1
+            if(ticket.category == "95_Extraccion"):
+                extracciones += 1
+            if(ticket.category == "80_Credenciales"):
+                credenciales += 1
+        
+    # Deletes previous register if it exists, then stores current data
+    cur = dream.cursor()
+    cur.execute('DELETE FROM dato WHERE usuario = "' + username + '" AND fecha = ' + str(date.strftime("%Y%m%d")))
+    sql = "INSERT INTO dato VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+    val = (username, int(date.strftime("%Y%m%d")), asignadas, enproceso, snmd, confirmadas, errores, consultas, extracciones, credenciales)
+    cur.execute(sql, val)
+    dream.commit()
+    cur.close()
+
 # Ticket array
 class ticket():
     def __init__(self, id=None, title=None, status=None, priority=None, pf=None, category=None, mod=None, delay=None, handler=None, realName=None):
@@ -162,18 +200,18 @@ ticketList = []
 # Data object
 class data():
     def __init__(self):
-        self.d_status { }
-        self.d_category { }
-        self.d_agent { }
+        self.d_status = { }
+        self.d_category = { }
+        self.d_agent = { }
 
 # Database connection
-#conn = mariadb.connect(user="us_lectura", password="us_lectura", host="172.17.8.96", port=3306, database='bugtracker')
-conn = mysql.connector.connect(host="mysql.fractalmonkey.xyz", user="seikken", passwd="ovislink1", database="alumbra_mantis ") 
+#conn = mariadb.connect(user=sys.argv[1], password=sys.argv[1], host=sys.argv[2], port=3306, database='bugtracker')
+mantis = mysql.connector.connect(host=sys.argv[1], user=sys.argv[2], passwd=sys.argv[3], database="alumbra_mantis")
 
 # SQL select
 # pf: 91 / 1
 # módulo: 11 / 2
-cur = conn.cursor()
+cur = mantis.cursor()
 cur.execute("""
 SELECT distinct bug.id as id,
        bug.summary as summary,
@@ -191,6 +229,7 @@ LEFT JOIN mantis_category_table cat ON bug.category_id = cat.id
 LEFT JOIN mantis_custom_field_string_table pf on bug.id = pf.bug_id AND pf.field_id = 1
 LEFT JOIN mantis_custom_field_string_table module on bug.id = module.bug_id AND module.field_id = 2
 WHERE user.username IN ('maya_kar', 'juan_jos', 'sanchez_and', 'sanchis_vic', 'membrado_she', 'soporte_alumbra')
+AND NOT bug.status = 90
 ORDER BY bug.status desc
 """) 
 
@@ -198,8 +237,18 @@ ORDER BY bug.status desc
 for(id, summary, status, priority, pf, cat, module, delay, handler, realName) in cur:
     ticketList.append(ticket(id, summary, status, priority, pf, cat, module, delay, handler, realName))
 
-# Close database connection
-conn.close()
+# Close Mantis connection
+cur.close()
+mantis.close()
+
+# Count tickets and store data in Dreamhost db
+countTickets(ticketList, "sanchez_and")
+countTickets(ticketList, "membrado_she")
+countTickets(ticketList, "juan_jos")
+countTickets(ticketList, "sanchis_vic")
+countTickets(ticketList, "maya_kar")
+countTickets(ticketList, "soporte")
+countTickets(ticketList, "total")
 
 # Create md files
 makePage("sanchez_and", "Andrea")
@@ -207,5 +256,9 @@ makePage("membrado_she", "Sheila")
 makePage("juan_jos", "Jose")
 makePage("sanchis_vic", "Vicenta")
 makePage("maya_kar", "Karen")
+makePage("soporte", "Soporte")
 makePage("index", "Inicio")
 makePage("monitorizacion", "Monitorización")
+
+# Close Dreamhost connection
+dream.close()
